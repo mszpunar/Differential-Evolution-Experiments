@@ -1,0 +1,2 @@
+MAX_ITER = 1e6
+MAX_TOL = 1e-30

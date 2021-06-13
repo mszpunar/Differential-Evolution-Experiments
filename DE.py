@@ -1,3 +1,5 @@
+from typing import Optional
+
 import numpy as np
 from numpy.random import random
 from collections import namedtuple
@@ -6,29 +8,30 @@ from MinorClasses import Point
 from MinorClasses import EndConditions
 from Consts import *
 
-
 Result = namedtuple(
     'Result', ['best_point', 'end_reason', 'iteration_num'])
 
 
 class DifferentialEvolution:
-
     DEFAULT_CR = 0.5
     DEFAULT_F = 0.8
 
-    def __init__(self, objective_fun, max_iter=MAX_ITER, tolerance=MAX_TOL, f=DEFAULT_F, cr=DEFAULT_CR, lbd=None, crossover_method='BIN'):
+    def __init__(self, objective_fun, lbd: int, max_iter: int = MAX_ITER, tolerance: float = MAX_TOL,
+                 f: float = DEFAULT_F, cr: float = DEFAULT_CR,
+                 crossover_method: str = 'BIN', selection_method: str = 'RAND'):
         self.objective_fun = objective_fun
         self.population = None
         self.point_dim = self.objective_fun.dim
 
         self.max_iter = max_iter
         self.tolerance = tolerance
-        self.end_reason = None  # STRING
+        self.end_reason: Optional[str] = None
+        self.iterations = 0
 
         # ALGORITHM PARAMS
-        self.cr = cr  # FLOAT - parameter for crossover
-        self.f = f  # FLOAT
-        self.lbd = None
+        self.cr = cr
+        self.f = f
+        self.lbd = lbd
 
         # ALGORITHM METHODS
         if crossover_method == 'EXP':
@@ -36,9 +39,20 @@ class DifferentialEvolution:
         else:
             self.crossover = self._bin_crossover
 
+        if selection_method == 'RAND':
+            self.selection_method = self._rand_selection
+        elif selection_method == 'BEST':
+            self.selection_method = self._best_selection
+        elif selection_method == 'MEAN':
+            self.selection_method = self._mean_selection
+        elif selection_method == 'MEAN_VEC':
+            self.selection_method = self._mean_vector_base_selection
+        else:
+            self.selection_method = self._rand_mean_selection
+
     # ------- PRIVATE METHODS ------- #
 
-    def _sel_best(self):
+    def _get_best(self):
         # create an array of objective function values
         val_array = np.array([p.value for p in self.population])
 
@@ -47,9 +61,15 @@ class DifferentialEvolution:
         # minindex[0][0], because the value returned by np.where is a bit weird
         return self.population[min_index[0][0]]
 
+    def _get_mean(self):
+        # arrange population into matrix, where rows are points
+        population_matrix = np.asmatrix(np.array([p.coordinates for p in self.population]))
+        mean_point = np.asarray(population_matrix.mean(axis=0))[0]
+        return Point(coordinates=mean_point, objective_fun=self.objective_fun)
+
     def _check_end_cond(self, prev_best):
         end_conditions = EndConditions.check_end_conditions(iteration=self.iterations,
-                                                            vec1=prev_best, vec2=self._sel_best(),
+                                                            vec1=prev_best, vec2=self._get_best(),
                                                             obj_fun=self.objective_fun,
                                                             max_iter=self.max_iter,
                                                             tol=self.tolerance)
@@ -62,22 +82,11 @@ class DifferentialEvolution:
         else:
             return False
 
-    def _is_initialized(self, valid_parameters=None):
-        if valid_parameters:
-            parameter_list = [p for key, p in enumerate(
-                self.__dict__.values()) if key in valid_parameters]
-        else:
-            parameter_list = self.__dict__.values()
-
-        for val in parameter_list:
-            if val is None:
-                return False
-        return True
-
-    def _gen_random_population(self, size=50, scaler=1):
-        generated = scaler * \
-            np.random.uniform(size=(size, np.random.randint(
-                low=self.point_dim, high=self.point_dim+1)))
+    def _gen_random_population(self, size=None, scaler=1):
+        if not size:
+            size = self.lbd
+        generated = scaler * np.random.uniform(
+            size=(size, np.random.randint(low=self.point_dim, high=self.point_dim + 1)))
         raw_population = np.array([Point(
             coordinates=generated[i], objective_fun=self.objective_fun) for i in range(len(generated))])
 
@@ -86,7 +95,7 @@ class DifferentialEvolution:
         else:
             self.population = raw_population
 
-    # ------- ALGORITHM METHODS ------- #
+    # ------- CROSSOVER METHODS ------- #
 
     def _bin_crossover(self, x, y):
         z = np.empty(x.shape[0])
@@ -100,9 +109,8 @@ class DifferentialEvolution:
 
     def _exp_crossover(self, x, y):
         z = np.empty(x.shape[0])
-        # for i in range(x.shape[0]):
         i, n = 0, x.shape[0]
-        while(i < n):
+        while i < n:
             a = random()
             if a < self.cr:
                 z[i] = y[i]
@@ -111,12 +119,50 @@ class DifferentialEvolution:
                 i += 1
                 break
 
-        while(i < n):
+        while i < n:
             z[i] = x[i]
             i += 1
         return z
 
-    def tournament(self, x, y):
+    # --------- SELECTION METHODS --------- #
+    def _rand_selection(self):
+        # generates a random distinct 3 points
+        points = np.random.choice(self.population, size=3, replace=False)
+        r = points[0]
+        d_e = points[1:]
+        return r, d_e
+
+    def _best_selection(self):
+        # picks a best point and then picks two different random points
+        r = self._get_best()
+        d_e = np.random.choice(self.population, size=2, replace=False)
+        while d_e[0] == r or d_e[1] == r:
+            d_e = np.random.choice(self.population, size=2, replace=False)
+        return r, d_e
+
+    def _mean_selection(self):
+        # picks a mean point and then picks two different random points
+        r = self._get_mean()
+        d_e = np.random.choice(self.population, size=2, replace=False)
+        while d_e[0] == r or d_e[1] == r:
+            d_e = np.random.choice(self.population, size=2, replace=False)
+        return r, d_e
+
+    def _rand_mean_selection(self):
+        # picks two random points and avg of a third random point and a mean point
+        r, d_e = self._rand_selection()
+        mean = self._get_mean()
+        new_coords = np.mean(np.array([r.coordinates, mean.coordinates]), axis=0)
+        return Point(coordinates=new_coords, objective_fun=self.objective_fun), d_e
+
+    def _mean_vector_base_selection(self):
+        # picks two random points and a mean point
+        r, d_e = self._rand_selection()
+        d_e[0] = self._get_mean()
+        return r, d_e
+
+    # --------- GENERAL METHODS --------- #
+    def _tournament(self, x, y):
         res = self.objective_fun.compare(x, y)
         if res > 0:
             return y
@@ -128,43 +174,39 @@ class DifferentialEvolution:
             else:
                 return y
 
-    def single_iteration(self):
+    def _single_iteration(self):
         next_population = self.population
         for i in range(0, np.size(self.population, axis=0)):
-            # SELECTION - generates a random distinct 3 indexes from <0,mi> and picks corresponding points
-            indexes = np.random.choice(
-                np.arange(self.population.shape[0]), 3, replace=False)
-            r = self.population[indexes[0]]
-            d_e = np.array([self.population[indexes[1]],
-                            self.population[indexes[2]]])
+            # SELECTION
+            r, d_e = self.selection_method()
 
             # MUTATION and CROSSOVER
-            M = r.coordinates + self.f * \
+            m = r.coordinates + self.f * \
                 (d_e[1].coordinates - d_e[0].coordinates)
-            O = Point(self.crossover(self.population[i].coordinates, M))
+            o = Point(self.crossover(self.population[i].coordinates, m))
             if self.objective_fun.bounds:
-                O = self.objective_fun.repair_point(O)
-            O.update(self.objective_fun)
+                o = self.objective_fun.repair_point(o)
+            o.update(self.objective_fun)
 
-            next_population[i] = self.tournament(self.population[i], O)
+            # SUCCESSION
+            next_population[i] = self._tournament(self.population[i], o)
 
-        prev_best = self._sel_best()
+        prev_best = self._get_best()
         self.population = next_population
         self.iterations += 1
         return prev_best
 
     def run(self):
+        # INITIALIZE
         self.iterations = 0
-        if not self._is_initialized() and self.lbd:
-            self._gen_random_population(size=self.lbd)
-        elif not self._is_initialized():
-            self._gen_random_population()
-        prev_best = self._sel_best()
+        self._gen_random_population(size=self.lbd)
+        prev_best = self._get_best()
 
         # MAIN LOOP
         while not self._check_end_cond(prev_best):
-            prev_best = self.single_iteration()
+            prev_best = self._single_iteration()
+            print(prev_best.value)
 
-        return Result(best_point=self._sel_best(),
+        return Result(best_point=self._get_best(),
                       end_reason=self.end_reason,
                       iteration_num=self.iterations)

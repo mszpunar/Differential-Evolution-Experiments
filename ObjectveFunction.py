@@ -40,7 +40,8 @@ class ObjectiveFunction:
         x = point.coordinates
         if self.bounds:
             assert len(x) == len(self.bounds)
-            # out_info is a list of tuples where first element is an index of breached bound and second - info if it's upper or lower bound
+            # out_info is a list of tuples where first element
+            # is an index of breached bound and second - info if it's upper or lower bound
             out_info = []
             for i in range(len(x)):
                 if x[i] < self.bounds[i][0]:
